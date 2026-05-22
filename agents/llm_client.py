@@ -14,17 +14,14 @@ def chat(
     temperature: float = 0.7,
     max_tokens: int = 1024,
 ) -> str:
-    """
-    Send a single-turn chat request to Groq and return the text response.
-    Uses the openai-compatible Groq client (groq==0.11.0).
-    """
     from groq import Groq
 
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise EnvironmentError("GROQ_API_KEY is not set. Check your .env file.")
 
-    model = model or os.environ.get("GROQ_MODEL", "llama3-70b-8192")
+    # Use model from env, default to openai/gpt-oss-120b
+    model = model or os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
     client = Groq(api_key=api_key)
 
