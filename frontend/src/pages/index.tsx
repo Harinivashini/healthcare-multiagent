@@ -6,6 +6,8 @@ import MoodChart from "@/components/MoodChart";
 import FoodLogForm from "@/components/FoodLogForm";
 import MealPlanCard from "@/components/MealPlanCard";
 import SpikePredictorCard from "@/components/SpikePredictorCard";
+import EmergencyAlert from "@/components/EmergencyAlert";
+import AlertsHistory from "@/components/AlertsHistory";
 import { useAgent } from "@/hooks/useAgent";
 import {
   Activity, Heart, Utensils, ClipboardList,
@@ -24,9 +26,7 @@ function nowTime() {
 
 // ── Chat Sidebar ──────────────────────────────────────────────────────────────
 
-function ChatSidebar({
-  messages, onSend, loading,
-}: {
+function ChatSidebar({ messages, onSend, loading }: {
   messages: Message[];
   onSend: (text: string) => void;
   loading: boolean;
@@ -60,7 +60,7 @@ function ChatSidebar({
         {messages.length === 0 && (
           <div className="text-center text-xs text-gray-400 mt-8 px-4">
             <Bot className="w-8 h-8 mx-auto mb-2 opacity-30" />
-            Try: &quot;log mood happy&quot; · &quot;cgm 145&quot; · &quot;generate meal plan&quot; · &quot;what is insulin?&quot;
+            Try: &quot;log mood happy&quot; · &quot;cgm 145&quot; · &quot;generate meal plan&quot;
           </div>
         )}
         {messages.map((m, i) => (
@@ -69,7 +69,7 @@ function ChatSidebar({
               ${m.role === "user" ? "bg-blue-600" : "bg-gray-200"}`}>
               {m.role === "user"
                 ? <User className="w-3 h-3 text-white" />
-                : <Bot className="w-3 h-3 text-gray-600" />}
+                : <Bot  className="w-3 h-3 text-gray-600" />}
             </div>
             <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs
               ${m.role === "user"
@@ -84,7 +84,7 @@ function ChatSidebar({
         ))}
         {loading && (
           <div className="flex gap-2">
-            <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+            <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center">
               <Bot className="w-3 h-3 text-gray-600" />
             </div>
             <div className="bg-gray-100 rounded-xl rounded-tl-none px-3 py-2">
@@ -123,7 +123,10 @@ function ChatSidebar({
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const { callAgent, fetchCGMHistory, fetchMoodHistory, loading, error } = useAgent();
+  const {
+    callAgent, fetchCGMHistory, fetchMoodHistory, fetchAlerts,
+    loading, error,
+  } = useAgent();
 
   const [userId, setUserId]           = useState("");
   const [user, setUser]               = useState<any>(null);
@@ -135,21 +138,25 @@ export default function Home() {
   const [activeTab, setActiveTab]     = useState<"dashboard" | "meals" | "food">("dashboard");
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatLoading, setChatLoading]   = useState(false);
-
-  // Spike predictor state
   const [spikePrediction, setSpikePrediction] = useState<any>(null);
   const [spikeLoading, setSpikeLoading]       = useState(false);
+
+  // Emergency alert state
+  const [emergencyAlert, setEmergencyAlert] = useState<any>(null);
+  const [pastAlerts, setPastAlerts]         = useState<any[]>([]);
 
   const addMsg = (role: "user" | "assistant", text: string) =>
     setChatMessages((prev) => [...prev, { role, text, time: nowTime() }]);
 
   const refreshCharts = async (uid: number) => {
-    const [cgm, mood] = await Promise.all([
+    const [cgm, mood, alerts] = await Promise.all([
       fetchCGMHistory(uid),
       fetchMoodHistory(uid),
+      fetchAlerts(uid).catch(() => []),
     ]);
     setCgmHistory(cgm || []);
     setMoodHistory(mood || []);
+    setPastAlerts(alerts || []);
   };
 
   // ── Login ────────────────────────────────────────────────────────────────
@@ -178,23 +185,38 @@ export default function Home() {
 
   const handleCGMSubmit = async () => {
     if (!cgmInput) return;
-    const res = await callAgent("cgm", { user_id: user.user_id, reading: parseFloat(cgmInput) });
-    if (res?.result?.alert_message) addMsg("assistant", res.result.alert_message);
+    const val = parseFloat(cgmInput);
+    const res = await callAgent("cgm", { user_id: user.user_id, reading: val });
     setCgmInput("");
+
+    if (res?.result) {
+      const r = res.result;
+      // Trigger emergency alert for critical readings
+      if (r.critical) {
+        setEmergencyAlert({
+          reading:         r.reading,
+          level:           r.level,
+          title:           r.title,
+          clinical:        r.clinical,
+          actions:         r.actions,
+          recheck_minutes: r.recheck_minutes,
+        });
+      } else {
+        addMsg("assistant", r.alert_message || r.title);
+      }
+    }
     await refreshCharts(user.user_id);
   };
 
-  // ── Food + auto spike prediction ─────────────────────────────────────────
+  // ── Food + spike ─────────────────────────────────────────────────────────
 
   const handleFoodLog = async (description: string, timestamp: string) => {
-    // 1. Log the food
     const res = await callAgent("food", { user_id: user.user_id, description, timestamp });
     if (res?.result?.message) addMsg("assistant", res.result.message);
 
-    // 2. Auto-trigger spike prediction
     setSpikeLoading(true);
     setSpikePrediction(null);
-    setActiveTab("food"); // stay on food tab to show the card
+    setActiveTab("food");
     addMsg("assistant", `⚡ Analysing glucose spike risk for: "${description}"…`);
     try {
       const spikeRes = await callAgent("spike", {
@@ -203,13 +225,11 @@ export default function Home() {
       });
       if (spikeRes?.result) {
         setSpikePrediction(spikeRes.result);
-        const risk = spikeRes.result.spike_risk || "UNKNOWN";
+        const risk  = spikeRes.result.spike_risk || "UNKNOWN";
         const emoji = risk === "HIGH" ? "🔴" : risk === "MEDIUM" ? "🟡" : "🟢";
         addMsg("assistant",
           `${emoji} Spike Risk: ${risk}\n` +
-          (spikeRes.result.actions?.[0]
-            ? `Top action: ${spikeRes.result.actions[0]}`
-            : "")
+          (spikeRes.result.actions?.[0] ? `Top action: ${spikeRes.result.actions[0]}` : "")
         );
       }
     } finally {
@@ -224,9 +244,8 @@ export default function Home() {
     const res = await callAgent("meal_plan", { user_id: user.user_id });
     if (res?.result) {
       const planData = res.result.plan ?? res.result;
-      const message  = res.result.message ?? "Meal plan generated!";
       setMealPlan(planData);
-      addMsg("assistant", message);
+      addMsg("assistant", res.result.message ?? "Meal plan generated!");
       setActiveTab("meals");
     }
   };
@@ -234,7 +253,7 @@ export default function Home() {
   // ── Meal Swap ─────────────────────────────────────────────────────────────
 
   const handleMealSwap = async (slot: string, currentMealName: string) => {
-    addMsg("assistant", `🔄 Swapping your ${slot}… finding a better option!`);
+    addMsg("assistant", `🔄 Swapping your ${slot}…`);
     const res = await callAgent("meal_swap", {
       user_id: user.user_id,
       slot,
@@ -242,29 +261,21 @@ export default function Home() {
     });
     if (res?.result?.meal) {
       const newMeal = res.result.meal;
-      addMsg("assistant",
-        `✅ Swapped ${slot} to: ${newMeal.name}
-${newMeal.description || ""}`
-      );
+      addMsg("assistant", `✅ Swapped ${slot} to: ${newMeal.name}`);
       return newMeal;
     }
-    addMsg("assistant", "Sorry, could not generate a swap right now. Try again!");
     return null;
   };
 
-  // ── Recipe ───────────────────────────────────────────────────────────────
+  // ── Recipe ────────────────────────────────────────────────────────────────
 
   const handleRecipe = async (mealName: string) => {
     addMsg("assistant", `📖 Fetching recipe for ${mealName}…`);
-    const res = await callAgent("recipe", {
-      user_id: user.user_id,
-      meal_name: mealName,
-    });
+    const res = await callAgent("recipe", { user_id: user.user_id, meal_name: mealName });
     if (res?.result && !res.result.error) {
-      addMsg("assistant", `✅ Recipe ready for ${mealName}! Click 📖 Recipe to view it.`);
+      addMsg("assistant", `✅ Recipe ready! Click 📖 Recipe to view it.`);
       return res.result;
     }
-    addMsg("assistant", "Sorry, could not fetch the recipe right now.");
     return null;
   };
 
@@ -283,9 +294,8 @@ ${newMeal.description || ""}`
       } else if (lower.match(/\bcgm\b/) || lower.includes("glucose") || lower.includes("blood sugar")) {
         const match = text.match(/\d+(\.\d+)?/);
         if (match) {
-          const res = await callAgent("cgm", { user_id: user.user_id, reading: parseFloat(match[0]) });
-          if (res?.result?.alert_message) addMsg("assistant", res.result.alert_message);
-          await refreshCharts(user.user_id);
+          setCgmInput(match[0]);
+          await handleCGMSubmit();
         } else {
           addMsg("assistant", "Please include your glucose value — e.g. 'cgm 145'");
         }
@@ -353,174 +363,201 @@ ${newMeal.description || ""}`
   // ── Dashboard ─────────────────────────────────────────────────────────────
 
   const TABS = [
-    { id: "dashboard", label: "Dashboard",  icon: Activity },
-    { id: "meals",     label: "Meal Plan",   icon: ClipboardList },
-    { id: "food",      label: "Food Log",    icon: Utensils },
+    { id: "dashboard", label: "Dashboard", icon: Activity },
+    { id: "meals",     label: "Meal Plan",  icon: ClipboardList },
+    { id: "food",      label: "Food Log",   icon: Utensils },
   ] as const;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <>
+      {/* Emergency Alert Overlay */}
+      {emergencyAlert && (
+        <EmergencyAlert
+          alert={emergencyAlert}
+          onDismiss={() => {
+            setEmergencyAlert(null);
+            refreshCharts(user.user_id);
+          }}
+        />
+      )}
 
-      {/* Main panel */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+      <div className="flex h-screen overflow-hidden bg-gray-50">
 
-        {/* Header */}
-        <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-              <Heart className="w-4 h-4 text-white" />
+        {/* Main panel */}
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+
+          {/* Header */}
+          <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+                <Heart className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-800">
+                  Hello, {user.first_name} {user.last_name}!
+                </p>
+                <p className="text-xs text-gray-400">{user.city} · ID #{user.user_id}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-semibold text-gray-800">
-                Hello, {user.first_name} {user.last_name}!
-              </p>
-              <p className="text-xs text-gray-400">{user.city} · ID #{user.user_id}</p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-1">
+                {user.dietary_preference}
+              </span>
+              {/* Alert badge */}
+              {pastAlerts.length > 0 && (
+                <span className="text-xs bg-red-100 text-red-600 font-bold rounded-full px-2 py-1 flex items-center gap-1">
+                  🚨 {pastAlerts.length} alert{pastAlerts.length > 1 ? "s" : ""}
+                </span>
+              )}
+              <button onClick={() => refreshCharts(user.user_id)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                <RefreshCw className="w-4 h-4 text-gray-500" />
+              </button>
             </div>
+          </header>
+
+          {/* Tabs */}
+          <div className="bg-white border-b border-gray-200 px-6 flex gap-4">
+            {TABS.map(({ id, label, icon: Icon }) => (
+              <button key={id} onClick={() => setActiveTab(id)}
+                className={`flex items-center gap-1.5 py-3 text-sm border-b-2 transition-colors
+                  ${activeTab === id
+                    ? "border-blue-600 text-blue-700 font-medium"
+                    : "border-transparent text-gray-500 hover:text-gray-700"}`}>
+                <Icon className="w-4 h-4" />{label}
+              </button>
+            ))}
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs bg-blue-50 text-blue-700 rounded-full px-2 py-1">
-              {user.dietary_preference}
-            </span>
-            <button onClick={() => refreshCharts(user.user_id)}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-              <RefreshCw className="w-4 h-4 text-gray-500" />
-            </button>
-          </div>
-        </header>
 
-        {/* Tabs */}
-        <div className="bg-white border-b border-gray-200 px-6 flex gap-4">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button key={id} onClick={() => setActiveTab(id)}
-              className={`flex items-center gap-1.5 py-3 text-sm border-b-2 transition-colors
-                ${activeTab === id
-                  ? "border-blue-600 text-blue-700 font-medium"
-                  : "border-transparent text-gray-500 hover:text-gray-700"}`}>
-              <Icon className="w-4 h-4" />{label}
-            </button>
-          ))}
-        </div>
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            {/* ── Dashboard Tab ── */}
+            {activeTab === "dashboard" && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  {/* CGM */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-blue-600" /> Log CGM Reading
+                    </h3>
+                    <div className="flex gap-2">
+                      <input type="number" placeholder="mg/dL"
+                        className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm
+                                   focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={cgmInput}
+                        onChange={(e) => setCgmInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleCGMSubmit()} />
+                      <button onClick={handleCGMSubmit} disabled={loading || !cgmInput}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50
+                                   text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
+                        Log
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1.5">
+                      Critical thresholds: &lt;70 or &gt;250 mg/dL
+                    </p>
+                  </div>
 
-          {/* ── Dashboard Tab ── */}
-          {activeTab === "dashboard" && (
-            <>
-              <div className="grid grid-cols-2 gap-4">
+                  {/* Mood */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                      <Heart className="w-4 h-4 text-rose-500" /> Log Mood
+                    </h3>
+                    <div className="flex gap-2 flex-wrap">
+                      {["happy","sad","excited","tired","anxious","calm"].map((m) => (
+                        <button key={m} onClick={() => handleMoodSubmit(m)} disabled={loading}
+                          className="text-xs px-2 py-1 rounded-full border border-gray-300
+                                     hover:bg-blue-50 hover:border-blue-300 disabled:opacity-50
+                                     transition-colors capitalize">
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Past Alerts History */}
+                {pastAlerts.length > 0 && (
+                  <AlertsHistory alerts={pastAlerts} />
+                )}
+
                 <div className="bg-white rounded-xl border border-gray-200 p-4">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-blue-600" /> Log CGM Reading
-                  </h3>
-                  <div className="flex gap-2">
-                    <input type="number" placeholder="mg/dL"
-                      className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm
-                                 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={cgmInput}
-                      onChange={(e) => setCgmInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleCGMSubmit()} />
-                    <button onClick={handleCGMSubmit} disabled={loading || !cgmInput}
-                      className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50
-                                 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
-                      Log
+                  <CGMChart data={cgmHistory} />
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <MoodChart data={moodHistory} />
+                </div>
+
+                <button onClick={handleMealPlan} disabled={loading}
+                  className="w-full bg-gradient-to-r from-blue-600 to-blue-500
+                             hover:from-blue-700 hover:to-blue-600 disabled:opacity-50
+                             text-white rounded-xl py-3 text-sm font-semibold
+                             flex items-center justify-center gap-2 transition-all shadow-sm">
+                  <ClipboardList className="w-4 h-4" />
+                  {loading ? "Generating…" : "✨ Generate Today's Meal Plan"}
+                </button>
+              </>
+            )}
+
+            {/* ── Meals Tab ── */}
+            {activeTab === "meals" && (
+              <div>
+                {mealPlan && !mealPlan.parse_error ? (
+                  <MealPlanCard
+                    plan={mealPlan}
+                    userId={user.user_id}
+                    onSwap={handleMealSwap}
+                    onRecipe={handleRecipe}
+                  />
+                ) : mealPlan?.parse_error ? (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4">
+                    <h3 className="text-sm font-semibold text-gray-700 mb-3">🥗 Your Meal Plan</h3>
+                    <p className="text-xs text-gray-600 whitespace-pre-wrap leading-relaxed">{mealPlan.raw}</p>
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-gray-400">
+                    <ClipboardList className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                    <p className="text-sm">No meal plan yet.</p>
+                    <button onClick={handleMealPlan} disabled={loading}
+                      className="mt-4 bg-blue-600 text-white rounded-lg px-5 py-2
+                                 text-sm font-medium hover:bg-blue-700 transition-colors">
+                      Generate Meal Plan
                     </button>
                   </div>
-                </div>
+                )}
+              </div>
+            )}
 
-                <div className="bg-white rounded-xl border border-gray-200 p-4">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                    <Heart className="w-4 h-4 text-rose-500" /> Log Mood
-                  </h3>
-                  <div className="flex gap-2 flex-wrap">
-                    {["happy","sad","excited","tired","anxious","calm"].map((m) => (
-                      <button key={m} onClick={() => handleMoodSubmit(m)} disabled={loading}
-                        className="text-xs px-2 py-1 rounded-full border border-gray-300
-                                   hover:bg-blue-50 hover:border-blue-300 disabled:opacity-50
-                                   transition-colors capitalize">
-                        {m}
-                      </button>
-                    ))}
+            {/* ── Food Tab ── */}
+            {activeTab === "food" && (
+              <div className="space-y-4">
+                <FoodLogForm onSubmit={handleFoodLog} loading={loading || spikeLoading} />
+                {(spikePrediction || spikeLoading) && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="h-px flex-1 bg-gray-200" />
+                      <span className="text-xs text-gray-400 font-medium">⚡ AI Spike Analysis</span>
+                      <div className="h-px flex-1 bg-gray-200" />
+                    </div>
+                    <SpikePredictorCard prediction={spikePrediction} loading={spikeLoading} />
                   </div>
-                </div>
+                )}
               </div>
+            )}
 
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <CGMChart data={cgmHistory} />
+            {error && (
+              <div className="flex items-center gap-2 text-red-600 text-xs bg-red-50
+                               border border-red-100 rounded-lg px-3 py-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />{error}
               </div>
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <MoodChart data={moodHistory} />
-              </div>
-
-              <button onClick={handleMealPlan} disabled={loading}
-                className="w-full bg-gradient-to-r from-blue-600 to-blue-500
-                           hover:from-blue-700 hover:to-blue-600 disabled:opacity-50
-                           text-white rounded-xl py-3 text-sm font-semibold
-                           flex items-center justify-center gap-2 transition-all shadow-sm">
-                <ClipboardList className="w-4 h-4" />
-                {loading ? "Generating…" : "✨ Generate Today's Meal Plan"}
-              </button>
-            </>
-          )}
-
-          {/* ── Meals Tab ── */}
-          {activeTab === "meals" && (
-            <div>
-              {mealPlan && !mealPlan.parse_error ? (
-                <MealPlanCard plan={mealPlan} userId={user.user_id} onSwap={handleMealSwap} onRecipe={handleRecipe} />
-              ) : mealPlan?.parse_error ? (
-                <div className="bg-white rounded-xl border border-gray-200 p-4">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">🥗 Your Meal Plan</h3>
-                  <p className="text-xs text-gray-600 whitespace-pre-wrap leading-relaxed">
-                    {mealPlan.raw}
-                  </p>
-                </div>
-              ) : (
-                <div className="text-center py-12 text-gray-400">
-                  <ClipboardList className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                  <p className="text-sm">No meal plan yet.</p>
-                  <button onClick={handleMealPlan} disabled={loading}
-                    className="mt-4 bg-blue-600 text-white rounded-lg px-5 py-2
-                               text-sm font-medium hover:bg-blue-700 transition-colors">
-                    Generate Meal Plan
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── Food Tab ── */}
-          {activeTab === "food" && (
-            <div className="space-y-4">
-              <FoodLogForm onSubmit={handleFoodLog} loading={loading || spikeLoading} />
-
-              {/* Spike predictor card — appears after food is logged */}
-              {(spikePrediction || spikeLoading) && (
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="h-px flex-1 bg-gray-200" />
-                    <span className="text-xs text-gray-400 font-medium">⚡ AI Spike Analysis</span>
-                    <div className="h-px flex-1 bg-gray-200" />
-                  </div>
-                  <SpikePredictorCard
-                    prediction={spikePrediction}
-                    loading={spikeLoading}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-center gap-2 text-red-600 text-xs bg-red-50
-                             border border-red-100 rounded-lg px-3 py-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />{error}
-            </div>
-          )}
+            )}
+          </div>
         </div>
-      </div>
 
-      {/* Chat Sidebar */}
-      <ChatSidebar messages={chatMessages} onSend={handleChatSend} loading={chatLoading} />
-    </div>
+        {/* Chat Sidebar */}
+        <ChatSidebar messages={chatMessages} onSend={handleChatSend} loading={chatLoading} />
+      </div>
+    </>
   );
 }

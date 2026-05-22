@@ -24,6 +24,7 @@ from data.db import (
     list_users, get_user,
     get_cgm_history, get_mood_history,
     get_food_history, get_latest_meal_plan,
+    get_critical_alerts, create_alerts_table,
 )
 
 app = FastAPI(
@@ -137,6 +138,16 @@ def get_user_meal_plan(user_id: int):
     if not plan:
         raise HTTPException(status_code=404, detail="No meal plan found for this user.")
     return {"user_id": user_id, **plan}
+
+
+@app.get("/users/{user_id}/alerts")
+def get_user_alerts(user_id: int, limit: int = 20):
+    return {"user_id": user_id, "alerts": get_critical_alerts(user_id, limit)}
+
+
+@app.on_event("startup")
+async def startup_event():
+    create_alerts_table()
 
 
 if __name__ == "__main__":

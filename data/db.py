@@ -141,3 +141,42 @@ def get_latest_meal_plan(user_id: int) -> dict | None:
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+# ── Critical Alert helpers ────────────────────────────────────────────────────
+
+def log_critical_alert(user_id: int, reading: float, alert_type: str, message: str) -> dict:
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO critical_alerts
+               (user_id, reading, alert_type, message)
+               VALUES (?, ?, ?, ?)""",
+            (user_id, reading, alert_type, message),
+        )
+    return {"user_id": user_id, "reading": reading, "alert_type": alert_type}
+
+
+def get_critical_alerts(user_id: int, limit: int = 20) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT reading, alert_type, message, logged_at
+               FROM critical_alerts WHERE user_id = ?
+               ORDER BY logged_at DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_alerts_table():
+    with get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS critical_alerts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                reading    REAL NOT NULL,
+                alert_type TEXT NOT NULL,
+                message    TEXT NOT NULL,
+                logged_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()

@@ -69,12 +69,18 @@ export function useAgent() {
     return data.food_history;
   };
 
+  const fetchAlerts = async (userId: number) => {
+    const { data } = await axios.get(`${API_URL}/users/${userId}/alerts`);
+    return data.alerts;
+  };
+
   return {
     callAgent,
     fetchUserProfile,
     fetchCGMHistory,
     fetchMoodHistory,
     fetchFoodHistory,
+    fetchAlerts,
     loading,
     error,
   };
