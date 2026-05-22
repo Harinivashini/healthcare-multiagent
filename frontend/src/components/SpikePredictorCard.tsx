@@ -76,7 +76,7 @@ export default function SpikePredictorCard({ prediction, loading }: Props) {
     );
   }
 
-  const risk  = prediction.spike_risk || "LOW";
+  const risk  = (["LOW","MEDIUM","HIGH"].includes(prediction.spike_risk || "") ? prediction.spike_risk : "MEDIUM") as "LOW"|"MEDIUM"|"HIGH";
   const score = Math.min(10, Math.max(1, prediction.risk_score || 1));
 
   const cfg = {

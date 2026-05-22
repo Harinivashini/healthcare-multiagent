@@ -35,7 +35,7 @@ def get_user(user_id: int) -> dict | None:
 def list_users(limit: int = 10) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT user_id, first_name, last_name, city FROM users LIMIT ?",
+            "SELECT user_id, first_name, last_name, city, dietary_preference, medical_conditions, physical_limitations FROM users LIMIT ?",
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
