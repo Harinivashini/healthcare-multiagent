@@ -1,0 +1,148 @@
+{
+  "agents": [
+    {
+      "name": "GreetingAgent",
+      "file": "agents/greeting_agent.py",
+      "intent": "greet",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "integer", "description": "User ID (1-100)" }
+        },
+        "required": ["user_id"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "valid":   { "type": "boolean" },
+          "user":    { "type": "object", "description": "Full user row if valid" },
+          "message": { "type": "string" }
+        }
+      },
+      "behaviour": "Validates user_id against SQLite. Invalid → error message. Valid → personalised greeting."
+    },
+    {
+      "name": "MoodTrackerAgent",
+      "file": "agents/mood_tracker_agent.py",
+      "intent": "mood",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "integer" },
+          "mood":    { "type": "string", "enum": ["happy","excited","content","calm","neutral","tired","anxious","sad","angry"] }
+        },
+        "required": ["user_id", "mood"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "mood":            { "type": "string" },
+          "score":           { "type": "integer", "minimum": 1, "maximum": 5 },
+          "rolling_average": { "type": "number" },
+          "history":         { "type": "array" },
+          "message":         { "type": "string" }
+        }
+      },
+      "behaviour": "Stores mood, computes rolling 7-session average, returns LLM empathetic response."
+    },
+    {
+      "name": "CGMAgent",
+      "file": "agents/cgm_agent.py",
+      "intent": "cgm",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "integer" },
+          "reading": { "type": "number", "minimum": 0 }
+        },
+        "required": ["user_id", "reading"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "reading":       { "type": "number" },
+          "flagged":       { "type": "boolean" },
+          "alert_message": { "type": "string" },
+          "history":       { "type": "array" }
+        }
+      },
+      "behaviour": "Validates reading against global (80-300) and personal range. Flags abnormal values with alerts."
+    },
+    {
+      "name": "FoodIntakeAgent",
+      "file": "agents/food_intake_agent.py",
+      "intent": "food",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id":     { "type": "integer" },
+          "description": { "type": "string" },
+          "timestamp":   { "type": "string", "format": "date-time", "description": "Optional ISO timestamp" }
+        },
+        "required": ["user_id", "description"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "timestamp":   { "type": "string" },
+          "macros": {
+            "type": "object",
+            "properties": {
+              "carbs_g":       { "type": "number" },
+              "protein_g":     { "type": "number" },
+              "fat_g":         { "type": "number" },
+              "calories_kcal": { "type": "number" },
+              "notes":         { "type": "string" }
+            }
+          },
+          "history": { "type": "array" },
+          "message": { "type": "string" }
+        }
+      },
+      "behaviour": "LLM estimates macros from free-text description. Persists entry to food_logs."
+    },
+    {
+      "name": "MealPlannerAgent",
+      "file": "agents/meal_planner_agent.py",
+      "intent": "meal_plan",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": { "type": "integer" }
+        },
+        "required": ["user_id"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "plan":    { "type": "object", "description": "Structured 3-meal plan with macros" },
+          "message": { "type": "string" }
+        }
+      },
+      "behaviour": "Fetches user profile, latest CGM, latest mood. Adjusts plan if CGM is out of range. LLM generates 3-meal plan with macros."
+    },
+    {
+      "name": "InterruptAgent",
+      "file": "agents/interrupt_agent.py",
+      "intent": "interrupt",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query":        { "type": "string" },
+          "current_flow": { "type": "string", "description": "Which agent/flow was active before interruption" }
+        },
+        "required": ["query"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "answer":        { "type": "string" },
+          "return_prompt": { "type": "string" },
+          "source":        { "type": "string", "enum": ["faq", "llm"] }
+        }
+      },
+      "behaviour": "FAQ lookup first, then LLM fallback. Always appends return-to-flow prompt."
+    }
+  ]
+}
