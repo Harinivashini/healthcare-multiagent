@@ -15,6 +15,7 @@ interface MealSlot {
   description: string;
   macros: MacroData;
   prep_tip: string;
+  parse_error?: boolean;
 }
 
 interface RecipeIngredient {
