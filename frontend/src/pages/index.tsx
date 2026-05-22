@@ -5,6 +5,7 @@ import CGMChart from "@/components/CGMChart";
 import MoodChart from "@/components/MoodChart";
 import FoodLogForm from "@/components/FoodLogForm";
 import MealPlanCard from "@/components/MealPlanCard";
+import SpikePredictorCard from "@/components/SpikePredictorCard";
 import { useAgent } from "@/hooks/useAgent";
 import {
   Activity, Heart, Utensils, ClipboardList,
@@ -24,9 +25,7 @@ function nowTime() {
 // ── Chat Sidebar ──────────────────────────────────────────────────────────────
 
 function ChatSidebar({
-  messages,
-  onSend,
-  loading,
+  messages, onSend, loading,
 }: {
   messages: Message[];
   onSend: (text: string) => void;
@@ -47,7 +46,7 @@ function ChatSidebar({
 
   return (
     <div className="w-80 flex flex-col bg-white border-l border-gray-200 h-full">
-      <div className="px-4 py-3 border-b border-gray-200 bg-brand-600">
+      <div className="px-4 py-3 border-b border-gray-200 bg-blue-600">
         <div className="flex items-center gap-2">
           <Bot className="w-5 h-5 text-white" />
           <div>
@@ -67,14 +66,14 @@ function ChatSidebar({
         {messages.map((m, i) => (
           <div key={i} className={`flex gap-2 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
             <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-1
-              ${m.role === "user" ? "bg-brand-600" : "bg-gray-200"}`}>
+              ${m.role === "user" ? "bg-blue-600" : "bg-gray-200"}`}>
               {m.role === "user"
                 ? <User className="w-3 h-3 text-white" />
                 : <Bot className="w-3 h-3 text-gray-600" />}
             </div>
             <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs
               ${m.role === "user"
-                ? "bg-brand-600 text-white rounded-tr-none"
+                ? "bg-blue-600 text-white rounded-tr-none"
                 : "bg-gray-100 text-gray-800 rounded-tl-none"}`}>
               <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
               <p className={`text-[10px] mt-1 ${m.role === "user" ? "text-blue-200" : "text-gray-400"}`}>
@@ -110,12 +109,9 @@ function ChatSidebar({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
           />
-          <button
-            onClick={handleSend}
-            disabled={loading || !input.trim()}
-            className="bg-brand-600 hover:bg-blue-700 disabled:opacity-50
-                       text-white rounded-lg p-2 transition-colors"
-          >
+          <button onClick={handleSend} disabled={loading || !input.trim()}
+            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50
+                       text-white rounded-lg p-2 transition-colors">
             <Send className="w-4 h-4" />
           </button>
         </div>
@@ -140,6 +136,10 @@ export default function Home() {
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatLoading, setChatLoading]   = useState(false);
 
+  // Spike predictor state
+  const [spikePrediction, setSpikePrediction] = useState<any>(null);
+  const [spikeLoading, setSpikeLoading]       = useState(false);
+
   const addMsg = (role: "user" | "assistant", text: string) =>
     setChatMessages((prev) => [...prev, { role, text, time: nowTime() }]);
 
@@ -152,7 +152,7 @@ export default function Home() {
     setMoodHistory(mood || []);
   };
 
-  // ── Login ─────────────────────────────────────────────────────────────────
+  // ── Login ────────────────────────────────────────────────────────────────
 
   const handleLogin = async () => {
     const id = parseInt(userId, 10);
@@ -166,7 +166,7 @@ export default function Home() {
     await refreshCharts(id);
   };
 
-  // ── Mood ──────────────────────────────────────────────────────────────────
+  // ── Mood ─────────────────────────────────────────────────────────────────
 
   const handleMoodSubmit = async (mood: string) => {
     const res = await callAgent("mood", { user_id: user.user_id, mood });
@@ -174,7 +174,7 @@ export default function Home() {
     await refreshCharts(user.user_id);
   };
 
-  // ── CGM ───────────────────────────────────────────────────────────────────
+  // ── CGM ──────────────────────────────────────────────────────────────────
 
   const handleCGMSubmit = async () => {
     if (!cgmInput) return;
@@ -184,11 +184,37 @@ export default function Home() {
     await refreshCharts(user.user_id);
   };
 
-  // ── Food ──────────────────────────────────────────────────────────────────
+  // ── Food + auto spike prediction ─────────────────────────────────────────
 
   const handleFoodLog = async (description: string, timestamp: string) => {
+    // 1. Log the food
     const res = await callAgent("food", { user_id: user.user_id, description, timestamp });
     if (res?.result?.message) addMsg("assistant", res.result.message);
+
+    // 2. Auto-trigger spike prediction
+    setSpikeLoading(true);
+    setSpikePrediction(null);
+    setActiveTab("food"); // stay on food tab to show the card
+    addMsg("assistant", `⚡ Analysing glucose spike risk for: "${description}"…`);
+    try {
+      const spikeRes = await callAgent("spike", {
+        user_id: user.user_id,
+        meal_description: description,
+      });
+      if (spikeRes?.result) {
+        setSpikePrediction(spikeRes.result);
+        const risk = spikeRes.result.spike_risk || "UNKNOWN";
+        const emoji = risk === "HIGH" ? "🔴" : risk === "MEDIUM" ? "🟡" : "🟢";
+        addMsg("assistant",
+          `${emoji} Spike Risk: ${risk}\n` +
+          (spikeRes.result.actions?.[0]
+            ? `Top action: ${spikeRes.result.actions[0]}`
+            : "")
+        );
+      }
+    } finally {
+      setSpikeLoading(false);
+    }
   };
 
   // ── Meal Plan ─────────────────────────────────────────────────────────────
@@ -197,14 +223,49 @@ export default function Home() {
     addMsg("assistant", "Generating your personalised meal plan… ⏳");
     const res = await callAgent("meal_plan", { user_id: user.user_id });
     if (res?.result) {
-      // Handle both { plan: {...}, message: "..." } and flat plan object
       const planData = res.result.plan ?? res.result;
       const message  = res.result.message ?? "Meal plan generated!";
-      console.log("Meal plan data:", planData); // debug
       setMealPlan(planData);
       addMsg("assistant", message);
       setActiveTab("meals");
     }
+  };
+
+  // ── Meal Swap ─────────────────────────────────────────────────────────────
+
+  const handleMealSwap = async (slot: string, currentMealName: string) => {
+    addMsg("assistant", `🔄 Swapping your ${slot}… finding a better option!`);
+    const res = await callAgent("meal_swap", {
+      user_id: user.user_id,
+      slot,
+      current_meal_name: currentMealName,
+    });
+    if (res?.result?.meal) {
+      const newMeal = res.result.meal;
+      addMsg("assistant",
+        `✅ Swapped ${slot} to: ${newMeal.name}
+${newMeal.description || ""}`
+      );
+      return newMeal;
+    }
+    addMsg("assistant", "Sorry, could not generate a swap right now. Try again!");
+    return null;
+  };
+
+  // ── Recipe ───────────────────────────────────────────────────────────────
+
+  const handleRecipe = async (mealName: string) => {
+    addMsg("assistant", `📖 Fetching recipe for ${mealName}…`);
+    const res = await callAgent("recipe", {
+      user_id: user.user_id,
+      meal_name: mealName,
+    });
+    if (res?.result && !res.result.error) {
+      addMsg("assistant", `✅ Recipe ready for ${mealName}! Click 📖 Recipe to view it.`);
+      return res.result;
+    }
+    addMsg("assistant", "Sorry, could not fetch the recipe right now.");
+    return null;
   };
 
   // ── Chat ──────────────────────────────────────────────────────────────────
@@ -235,8 +296,7 @@ export default function Home() {
       } else if (lower.includes("ate") || lower.includes("eat") || lower.includes("food") ||
                  lower.includes("had") || lower.includes("lunch") || lower.includes("dinner") ||
                  lower.includes("breakfast") || lower.includes("snack")) {
-        const res = await callAgent("food", { user_id: user.user_id, description: text, timestamp: new Date().toISOString() });
-        if (res?.result?.message) addMsg("assistant", res.result.message);
+        await handleFoodLog(text, new Date().toISOString());
       } else {
         const res = await callAgent("interrupt", { query: text, current_flow: activeTab });
         if (res?.result?.answer) addMsg("assistant", res.result.answer);
@@ -266,8 +326,7 @@ export default function Home() {
             Enter your User ID (1–100) to begin your personalised health session.
           </p>
           <input
-            type="number" min={1} max={100}
-            placeholder="Enter User ID (e.g. 7)"
+            type="number" min={1} max={100} placeholder="Enter User ID (e.g. 7)"
             className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm
                        focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
             value={userId}
@@ -279,12 +338,10 @@ export default function Home() {
               <AlertCircle className="w-4 h-4" />{loginError}
             </div>
           )}
-          <button
-            onClick={handleLogin} disabled={loading}
+          <button onClick={handleLogin} disabled={loading}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50
                        text-white rounded-lg py-3 text-sm font-medium
-                       flex items-center justify-center gap-2 transition-colors"
-          >
+                       flex items-center justify-center gap-2 transition-colors">
             <LogIn className="w-4 h-4" />
             {loading ? "Verifying…" : "Start Session"}
           </button>
@@ -296,9 +353,9 @@ export default function Home() {
   // ── Dashboard ─────────────────────────────────────────────────────────────
 
   const TABS = [
-    { id: "dashboard", label: "Dashboard", icon: Activity },
-    { id: "meals",     label: "Meal Plan",  icon: ClipboardList },
-    { id: "food",      label: "Food Log",   icon: Utensils },
+    { id: "dashboard", label: "Dashboard",  icon: Activity },
+    { id: "meals",     label: "Meal Plan",   icon: ClipboardList },
+    { id: "food",      label: "Food Log",    icon: Utensils },
   ] as const;
 
   return (
@@ -351,7 +408,6 @@ export default function Home() {
           {activeTab === "dashboard" && (
             <>
               <div className="grid grid-cols-2 gap-4">
-                {/* CGM */}
                 <div className="bg-white rounded-xl border border-gray-200 p-4">
                   <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                     <Activity className="w-4 h-4 text-blue-600" /> Log CGM Reading
@@ -371,15 +427,13 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Mood */}
                 <div className="bg-white rounded-xl border border-gray-200 p-4">
                   <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                     <Heart className="w-4 h-4 text-rose-500" /> Log Mood
                   </h3>
                   <div className="flex gap-2 flex-wrap">
                     {["happy","sad","excited","tired","anxious","calm"].map((m) => (
-                      <button key={m} onClick={() => handleMoodSubmit(m)}
-                        disabled={loading}
+                      <button key={m} onClick={() => handleMoodSubmit(m)} disabled={loading}
                         className="text-xs px-2 py-1 rounded-full border border-gray-300
                                    hover:bg-blue-50 hover:border-blue-300 disabled:opacity-50
                                    transition-colors capitalize">
@@ -390,17 +444,13 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* CGM Chart */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <CGMChart data={cgmHistory} />
               </div>
-
-              {/* Mood Chart */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <MoodChart data={moodHistory} />
               </div>
 
-              {/* Generate Meal Plan button */}
               <button onClick={handleMealPlan} disabled={loading}
                 className="w-full bg-gradient-to-r from-blue-600 to-blue-500
                            hover:from-blue-700 hover:to-blue-600 disabled:opacity-50
@@ -416,13 +466,10 @@ export default function Home() {
           {activeTab === "meals" && (
             <div>
               {mealPlan && !mealPlan.parse_error ? (
-                <MealPlanCard plan={mealPlan} />
+                <MealPlanCard plan={mealPlan} userId={user.user_id} onSwap={handleMealSwap} onRecipe={handleRecipe} />
               ) : mealPlan?.parse_error ? (
-                /* Fallback: show raw text if JSON parse failed */
                 <div className="bg-white rounded-xl border border-gray-200 p-4">
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                    <ClipboardList className="w-4 h-4 text-blue-600" /> Your Meal Plan
-                  </h3>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">🥗 Your Meal Plan</h3>
                   <p className="text-xs text-gray-600 whitespace-pre-wrap leading-relaxed">
                     {mealPlan.raw}
                   </p>
@@ -443,7 +490,24 @@ export default function Home() {
 
           {/* ── Food Tab ── */}
           {activeTab === "food" && (
-            <FoodLogForm onSubmit={handleFoodLog} loading={loading} />
+            <div className="space-y-4">
+              <FoodLogForm onSubmit={handleFoodLog} loading={loading || spikeLoading} />
+
+              {/* Spike predictor card — appears after food is logged */}
+              {(spikePrediction || spikeLoading) && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="h-px flex-1 bg-gray-200" />
+                    <span className="text-xs text-gray-400 font-medium">⚡ AI Spike Analysis</span>
+                    <div className="h-px flex-1 bg-gray-200" />
+                  </div>
+                  <SpikePredictorCard
+                    prediction={spikePrediction}
+                    loading={spikeLoading}
+                  />
+                </div>
+              )}
+            </div>
           )}
 
           {error && (

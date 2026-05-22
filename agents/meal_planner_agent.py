@@ -10,6 +10,7 @@ from data.db import (
     save_meal_plan, get_latest_meal_plan,
 )
 from agents.llm_client import chat
+from agents.json_parser import parse_json
 
 MEAL_PLAN_SYSTEM_PROMPT = """You are a registered dietitian AI.
 Generate a 1-day meal plan as ONLY a JSON object. No explanation, no markdown, no code blocks.
@@ -133,7 +134,7 @@ class MealPlannerAgent:
 
         context = _build_context(user, latest_cgm, latest_mood)
         raw     = chat(MEAL_PLAN_SYSTEM_PROMPT, context, temperature=0.3, max_tokens=1200)
-        plan    = _parse_plan(raw)
+        plan    = parse_json(raw)
 
         save_meal_plan(user_id, json.dumps(plan))
 
