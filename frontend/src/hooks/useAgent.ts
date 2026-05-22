@@ -15,6 +15,9 @@ export type Intent =
   | "cgm"
   | "food"
   | "meal_plan"
+  | "meal_swap"
+  | "recipe"
+  | "spike"
   | "interrupt";
 
 interface AgentResponse {
